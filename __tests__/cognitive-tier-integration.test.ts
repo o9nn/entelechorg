@@ -205,55 +205,43 @@ describe("MemoryConsolidator", () => {
   });
 
   it("drops writes when write is already in progress (writeInProgress guard)", async () => {
-    vi.useFakeTimers();
-
     const broadcaster = new GlobalWorkspaceBroadcaster();
 
-    let resolveWrite: (() => void) | undefined;
-    // Patch the consolidator's consolidate method to be slow.
-    const consolidator = new MemoryConsolidator();
-    const origSubscribe = consolidator.subscribe.bind(consolidator);
+    let resolveSlowWrite!: () => void;
+    const dropped: number[] = [];
 
-    // Inject a slow subscriber that holds the write lock.
-    let firstWriteStarted = false;
-    broadcaster.subscribe(async () => {
-      if (!firstWriteStarted) {
-        firstWriteStarted = true;
-        // Simulate a write that is still in-progress when second event fires.
-      }
+    // The first consolidation write blocks on a promise we control.
+    let firstWrite = true;
+    const consolidator = new MemoryConsolidator({
+      onWriteDropped: (n) => dropped.push(n),
+      afterConsolidate: async () => {
+        if (firstWrite) {
+          firstWrite = false;
+          await new Promise<void>((res) => {
+            resolveSlowWrite = res;
+          });
+        }
+      },
     });
-
     consolidator.subscribe(broadcaster);
 
-    const dropped: number[] = [];
-    const fastConsolidator = new MemoryConsolidator({
-      onWriteDropped: (n) => dropped.push(n),
-    });
+    // Start the first broadcast — its consolidation blocks.
+    const p1 = broadcaster.broadcast({ type: "a", payload: null, salience: 0.9 });
 
-    // Wire up to manual control: first write blocks.
-    let writeBlock: Promise<void> | null = null;
-    broadcaster.subscribe(async (event) => {
-      if (event.type === "slow") {
-        await (writeBlock = new Promise<void>((res) => { resolveWrite = res; }));
-      }
-    });
+    // Yield so the consolidator enters `writeInProgress = true` before p2.
+    await new Promise<void>((res) => setImmediate(res));
 
-    vi.useRealTimers();
+    // Second broadcast arrives while writeInProgress is true.
+    const p2 = broadcaster.broadcast({ type: "b", payload: null, salience: 0.9 });
 
-    // Emit a slow event and a fast event concurrently.
-    const p1 = broadcaster.broadcast({ type: "slow", payload: null, salience: 0.9 });
-    // Give the slow handler a moment to start.
-    await new Promise((res) => setImmediate(res));
-    const p2 = broadcaster.broadcast({ type: "fast", payload: null, salience: 0.9 });
-
-    resolveWrite?.();
+    // Unblock the first write.
+    resolveSlowWrite();
     await Promise.allSettled([p1, p2]);
 
-    // fastConsolidator should have dropped 0 writes — it has its own guard.
-    // This test verifies the guard exists (droppedWrites is readable).
-    expect(typeof fastConsolidator.droppedWrites).toBe("number");
-
-    origSubscribe; // reference to satisfy lint
+    expect(consolidator.droppedWrites).toBe(1);
+    expect(dropped).toEqual([1]);
+    // Only the first atom made it through.
+    expect(consolidator.atomSpace[MemorySubsystem.EPISODIC]).toHaveLength(1);
   });
 });
 

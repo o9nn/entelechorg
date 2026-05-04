@@ -32,6 +32,12 @@ export interface MemoryConsolidatorOptions {
   salienceThreshold?: number;
   /** Called when a write is dropped due to re-entrancy. */
   onWriteDropped?: (droppedCount: number) => void;
+  /**
+   * Optional async hook called at the end of each consolidation write, after
+   * the atom has been pushed to the AtomSpace. Primarily useful in tests to
+   * inject artificial latency and exercise the `writeInProgress` guard.
+   */
+  afterConsolidate?: (atom: MemoryAtom<EpisodicEvent>) => Promise<void>;
 }
 
 /**
@@ -47,12 +53,14 @@ export class MemoryConsolidator {
   private droppedWriteCount = 0;
   private readonly salienceThreshold: number;
   private readonly onWriteDropped?: (count: number) => void;
+  private readonly afterConsolidate?: (atom: MemoryAtom<EpisodicEvent>) => Promise<void>;
 
   readonly atomSpace: AtomSpace = createAtomSpace();
 
   constructor(opts: MemoryConsolidatorOptions = {}) {
     this.salienceThreshold = opts.salienceThreshold ?? 0.5;
     this.onWriteDropped = opts.onWriteDropped;
+    this.afterConsolidate = opts.afterConsolidate;
   }
 
   /**
@@ -107,5 +115,6 @@ export class MemoryConsolidator {
     };
 
     this.atomSpace[MemorySubsystem.EPISODIC].push(atom);
+    await this.afterConsolidate?.(atom);
   }
 }

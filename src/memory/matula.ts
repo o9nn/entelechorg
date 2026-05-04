@@ -16,7 +16,9 @@
  */
 
 /**
- * Canonical Matula primes for the seven tracked memory subsystems.
+ * Canonical Matula primes for the seven tracked modules in the echo-master
+ * patch table. Six of these map directly to memory subsystems; the seventh
+ * (`CI_WORKFLOW`) identifies the CI infrastructure module.
  *
  * | Prime | Subsystem                      | Source module                          |
  * |------:|--------------------------------|----------------------------------------|
@@ -60,11 +62,19 @@ export function compoundName(...primes: number[]): number {
 export function decompose(name: number): number[] {
   const factors: number[] = [];
   let n = name;
-  for (let p = 2; p <= n; p++) {
+  // Handle factor 2 separately, then only check odd numbers up to sqrt(n).
+  while (n % 2 === 0) {
+    factors.push(2);
+    n = Math.floor(n / 2);
+  }
+  for (let p = 3; p * p <= n; p += 2) {
     while (n % p === 0) {
       factors.push(p);
       n = Math.floor(n / p);
     }
+  }
+  if (n > 1) {
+    factors.push(n);
   }
   return factors;
 }
